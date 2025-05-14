@@ -1,6 +1,8 @@
 # NodeSpyder
 A powerful and efficient web crawler built with Node.js that extracts links, images, and videos from websites.
 
+> **Note:** This project is currently under active development and is not yet production ready.
+
 ## Features
 - Extracts all links from a given webpage
 - Built with Playwright for robust browser automation
