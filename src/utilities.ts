@@ -1,4 +1,4 @@
-import { chromium } from 'playwright';
+import { chromium, BrowserContextOptions } from 'playwright';
 import fs from 'fs';
 import path from 'path';
 import OpenAI from 'openai';
@@ -17,34 +17,115 @@ const openai = new OpenAI({
  * @param url The URL to crawl
  * @returns Object containing page title, array of links, and body content
  */
-export async function crawlPage(url: string): Promise<{ title: string, links: string[], bodyContent: string }> {
+export async function crawlPage(url: string): Promise<{ title: string, description: string | null, links: string[], bodyContent: string }> {
   // Launch a browser instance
-  const browser = await chromium.launch({ headless: process.env.NODE_ENV !== 'development' });
-  
+  const browser = await chromium.launch({ 
+    headless: process.env.NODE_ENV !== 'development', 
+    args: [
+      '--disable-blink-features=AutomationControlled',  // hides webdriver flag
+    ]
+  });
+
+  // baseline context options
+  const contextOpts: BrowserContextOptions = {
+    viewport: { width: 1366, height: 768 },
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
+    locale: 'en-US',
+    timezoneId: 'America/New_York',
+    javaScriptEnabled: true,
+  };
+
+  const context = await browser.newContext(contextOpts);
+  // Create a new page
+  const page = await context.newPage();
+
+  await page.addInitScript(() => {
+    // 1. navigator.webdriver → false
+    Object.defineProperty(navigator, 'webdriver', {
+      get: () => false,
+    });
+
+    // 2. Fake a consistent WebGL fingerprint
+    const getParameter = WebGLRenderingContext.prototype.getParameter;
+    WebGLRenderingContext.prototype.getParameter = function(parameter) {
+      // return a constant for UNMASKED_VENDOR_WEBGL & UNMASKED_RENDERER_WEBGL
+      if (parameter === 37445) return 'Google Inc. (Apple)';  
+      if (parameter === 37446) return 'ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Max, Unspecified Version)';
+      return getParameter.call(this, parameter);
+    };
+
+    Object.defineProperty(navigator, 'languages', {
+      get: () => ['en-US', 'en'],
+    });
+  });
+
   try {
-    // Create a new page
-    const page = await browser.newPage();
-    
+
     // Navigate to the URL
     console.log(`Crawling: ${url}`);
     await page.goto(url, { waitUntil: 'load' });
-    
-    // Extract title, links, and body content from the page
-    const { title, links, bodyContent } = await page.evaluate(() => {
+
+    try {
+      // Increase timeout to allow more time for scripts to load resources
+      await page.waitForLoadState('networkidle', { timeout: 7000 });
+      console.log('networkidle happened!');
+    } catch (e) {
+      console.log('networkidle did not happen within 7 s');
+    }
+
+    // Extract title and links
+    const { title, description, links } = await page.evaluate(() => {
       const title = document.title;
+      const description = document.querySelector('meta[name="description"]')?.getAttribute('content') || null;
       const anchors = Array.from(document.querySelectorAll('a'));
       const links = anchors
         .map(anchor => anchor.href)
-        .filter(href => href && href.startsWith('http'));
+        .filter(href => href && (
+          href.startsWith('http') || 
+          href.startsWith('/') || 
+          (href && !href.startsWith('#') && !href.startsWith('javascript:'))
+        ));
+
+      return { title, description, links };
+    });
+    
+    await page.evaluate(() => {
+      // Remove non-essential scripts (keep JSON-LD for structured data)
+      document.querySelectorAll('script:not([type="application/ld+json"])').forEach(el => el.remove());
       
+      // Remove style elements and inline styles
+      document.querySelectorAll('style').forEach(el => el.remove());
+      document.querySelectorAll('[style]').forEach(el => el.removeAttribute('style'));
+      document.querySelectorAll('[class]').forEach(el => el.removeAttribute('class'));
+      
+      // Remove SVG elements
+      document.querySelectorAll('svg').forEach(el => el.remove());
+      
+      // Remove noscript elements (content only shown when JS is disabled)
+      document.querySelectorAll('noscript').forEach(el => el.remove());
+      
+      // // Remove non-essential link elements (stylesheets, icons, etc.)
+      document.querySelectorAll('link[rel="stylesheet"], link[rel="icon"], link[rel="shortcut icon"], link[rel="prefetch"], link[rel="preload"], link[rel="preconnect"]').forEach(el => el.remove());
+
+      // Remove iframes
+      document.querySelectorAll('iframe').forEach(el => el.remove());
+      
+      // Remove non-core page content (navigation, sidebar, footer, etc.)
+      document.querySelectorAll('nav, header, footer, aside').forEach(el => el.remove());
+    });
+    
+    // Extract body content from the page
+    const bodyContent = await page.evaluate(() => {
+
+      // select the main element
+      const main = document.querySelector('main');
+
       // Get only the body content
-      const bodyContent = document.body.innerHTML;
-      
-      return { title, links, bodyContent };
+      return main ? main.innerHTML : document.body.innerHTML;
     });
     
     console.log(`Found ${links.length} links on ${url}`);
-    return { title, links, bodyContent };
+    return { title, description, links, bodyContent };
   } finally {
     // Add delay to observe the browser before closing
     if (process.env.NODE_ENV === 'development') {
@@ -116,7 +197,8 @@ If no price is found, return currentPrice and originalPrice as null, currency as
           content: `Extract the product pricing information as JSON from this HTML content: ${bodyContent.substring(0, Math.min(1000000, bodyContent.length))}`
         }
       ],
-      response_format: { type: "json_object" }
+      response_format: { type: "json_object" },
+      temperature: 0
     });
     
     // Log token usage information
@@ -160,7 +242,7 @@ export async function extractProductImages(bodyContent: string): Promise<any> {
 
   try {
     const response = await openai.chat.completions.create({
-      model: "gpt-4.1-nano",
+      model: "gpt-4.1-mini",
       messages: [
         {
           role: "system",
@@ -189,7 +271,8 @@ If no images are found, return an empty array for productImages and confidence a
           content: `Extract the product image information as JSON from this HTML content: ${bodyContent.substring(0, Math.min(1000000, bodyContent.length))}`
         }
       ],
-      response_format: { type: "json_object" }
+      response_format: { type: "json_object" },
+      temperature: 0
     });
     
     // Log token usage information
