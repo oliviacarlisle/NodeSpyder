@@ -84,6 +84,7 @@ async function main() {
     const combinedData = {
       url: startUrl,
       title: result.title,
+      description: result.description,
       priceData,
       imageData,
       links: result.links

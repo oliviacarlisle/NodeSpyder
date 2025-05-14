@@ -17,7 +17,7 @@ const openai = new OpenAI({
  * @param url The URL to crawl
  * @returns Object containing page title, array of links, and body content
  */
-export async function crawlPage(url: string): Promise<{ title: string, links: string[], bodyContent: string }> {
+export async function crawlPage(url: string): Promise<{ title: string, description: string | null, links: string[], bodyContent: string }> {
   // Launch a browser instance
   const browser = await chromium.launch({ 
     headless: process.env.NODE_ENV !== 'development', 
@@ -66,28 +66,66 @@ export async function crawlPage(url: string): Promise<{ title: string, links: st
     await page.goto(url, { waitUntil: 'load' });
 
     try {
-      await page.waitForLoadState('networkidle', { timeout: 5000 });
+      // Increase timeout to allow more time for scripts to load resources
+      await page.waitForLoadState('networkidle', { timeout: 7000 });
       console.log('networkidle happened!');
     } catch (e) {
-      console.log('networkidle did not happen within 5 s');
+      console.log('networkidle did not happen within 7 s');
     }
-    
-    // Extract title, links, and body content from the page
-    const { title, links, bodyContent } = await page.evaluate(() => {
+
+    // Extract title and links
+    const { title, description, links } = await page.evaluate(() => {
       const title = document.title;
+      const description = document.querySelector('meta[name="description"]')?.getAttribute('content') || null;
       const anchors = Array.from(document.querySelectorAll('a'));
       const links = anchors
         .map(anchor => anchor.href)
-        .filter(href => href && href.startsWith('http'));
+        .filter(href => href && (
+          href.startsWith('http') || 
+          href.startsWith('/') || 
+          (href && !href.startsWith('#') && !href.startsWith('javascript:'))
+        ));
+
+      return { title, description, links };
+    });
+    
+    await page.evaluate(() => {
+      // Remove non-essential scripts (keep JSON-LD for structured data)
+      document.querySelectorAll('script:not([type="application/ld+json"])').forEach(el => el.remove());
       
+      // Remove style elements and inline styles
+      document.querySelectorAll('style').forEach(el => el.remove());
+      document.querySelectorAll('[style]').forEach(el => el.removeAttribute('style'));
+      document.querySelectorAll('[class]').forEach(el => el.removeAttribute('class'));
+      
+      // Remove SVG elements
+      document.querySelectorAll('svg').forEach(el => el.remove());
+      
+      // Remove noscript elements (content only shown when JS is disabled)
+      document.querySelectorAll('noscript').forEach(el => el.remove());
+      
+      // // Remove non-essential link elements (stylesheets, icons, etc.)
+      document.querySelectorAll('link[rel="stylesheet"], link[rel="icon"], link[rel="shortcut icon"], link[rel="prefetch"], link[rel="preload"], link[rel="preconnect"]').forEach(el => el.remove());
+
+      // Remove iframes
+      document.querySelectorAll('iframe').forEach(el => el.remove());
+      
+      // Remove non-core page content (navigation, sidebar, footer, etc.)
+      document.querySelectorAll('nav, header, footer, aside').forEach(el => el.remove());
+    });
+    
+    // Extract body content from the page
+    const bodyContent = await page.evaluate(() => {
+
+      // select the main element
+      const main = document.querySelector('main');
+
       // Get only the body content
-      const bodyContent = document.body.innerHTML;
-      
-      return { title, links, bodyContent };
+      return main ? main.innerHTML : document.body.innerHTML;
     });
     
     console.log(`Found ${links.length} links on ${url}`);
-    return { title, links, bodyContent };
+    return { title, description, links, bodyContent };
   } finally {
     // Add delay to observe the browser before closing
     if (process.env.NODE_ENV === 'development') {
@@ -159,7 +197,8 @@ If no price is found, return currentPrice and originalPrice as null, currency as
           content: `Extract the product pricing information as JSON from this HTML content: ${bodyContent.substring(0, Math.min(1000000, bodyContent.length))}`
         }
       ],
-      response_format: { type: "json_object" }
+      response_format: { type: "json_object" },
+      temperature: 0
     });
     
     // Log token usage information
@@ -203,7 +242,7 @@ export async function extractProductImages(bodyContent: string): Promise<any> {
 
   try {
     const response = await openai.chat.completions.create({
-      model: "gpt-4.1-nano",
+      model: "gpt-4.1-mini",
       messages: [
         {
           role: "system",
@@ -232,7 +271,8 @@ If no images are found, return an empty array for productImages and confidence a
           content: `Extract the product image information as JSON from this HTML content: ${bodyContent.substring(0, Math.min(1000000, bodyContent.length))}`
         }
       ],
-      response_format: { type: "json_object" }
+      response_format: { type: "json_object" },
+      temperature: 0
     });
     
     // Log token usage information
