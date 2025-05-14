@@ -38,3 +38,6 @@ npm start -- https://example.com
 # Run the TypeScript compiler in watch mode
 npm run dev -- https://example.com
 ```
+
+## Contributing
+Contributions are welcome! Please read the [contributing guidelines](CONTRIBUTING.md) for details on how to contribute to this project.
