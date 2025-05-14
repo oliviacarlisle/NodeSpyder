@@ -1,4 +1,4 @@
-import { chromium } from 'playwright';
+import { chromium, BrowserContextOptions } from 'playwright';
 import fs from 'fs';
 import path from 'path';
 import OpenAI from 'openai';
@@ -19,15 +19,58 @@ const openai = new OpenAI({
  */
 export async function crawlPage(url: string): Promise<{ title: string, links: string[], bodyContent: string }> {
   // Launch a browser instance
-  const browser = await chromium.launch({ headless: process.env.NODE_ENV !== 'development' });
-  
+  const browser = await chromium.launch({ 
+    headless: process.env.NODE_ENV !== 'development', 
+    args: [
+      '--disable-blink-features=AutomationControlled',  // hides webdriver flag
+    ]
+  });
+
+  // baseline context options
+  const contextOpts: BrowserContextOptions = {
+    viewport: { width: 1366, height: 768 },
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
+    locale: 'en-US',
+    timezoneId: 'America/New_York',
+    javaScriptEnabled: true,
+  };
+
+  const context = await browser.newContext(contextOpts);
+  // Create a new page
+  const page = await context.newPage();
+
+  await page.addInitScript(() => {
+    // 1. navigator.webdriver → false
+    Object.defineProperty(navigator, 'webdriver', {
+      get: () => false,
+    });
+
+    // 2. Fake a consistent WebGL fingerprint
+    const getParameter = WebGLRenderingContext.prototype.getParameter;
+    WebGLRenderingContext.prototype.getParameter = function(parameter) {
+      // return a constant for UNMASKED_VENDOR_WEBGL & UNMASKED_RENDERER_WEBGL
+      if (parameter === 37445) return 'Google Inc. (Apple)';  
+      if (parameter === 37446) return 'ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Max, Unspecified Version)';
+      return getParameter.call(this, parameter);
+    };
+
+    Object.defineProperty(navigator, 'languages', {
+      get: () => ['en-US', 'en'],
+    });
+  });
+
   try {
-    // Create a new page
-    const page = await browser.newPage();
-    
+
     // Navigate to the URL
     console.log(`Crawling: ${url}`);
     await page.goto(url, { waitUntil: 'load' });
+
+    try {
+      await page.waitForLoadState('networkidle', { timeout: 5000 });
+      console.log('networkidle happened!');
+    } catch (e) {
+      console.log('networkidle did not happen within 5 s');
+    }
     
     // Extract title, links, and body content from the page
     const { title, links, bodyContent } = await page.evaluate(() => {
