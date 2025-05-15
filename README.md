@@ -67,6 +67,8 @@ Here's an example of the full JSON output from crawling a product page:
 {
   "url": "https://www.thereformation.com/products/everett-linen-dress/1317269RDE.html?dwvar_1317269RDE_color=RDE",
   "title": "Everett Linen Dress",
+  "description": "Wear me. Shop the Everett Linen Dress from Reformation, a sleeveless midi dress with a square neckline, fitted bust, relaxed skirt, and embroidery detailing.",
+  "timestamp": "2025-05-15T02:13:55.421Z",
   "priceData": {
     "currentPrice": 298,
     "originalPrice": 298,

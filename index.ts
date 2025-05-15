@@ -49,12 +49,16 @@ async function main() {
     
     console.log(`Page title: ${result.title}`);
     console.log(`Found ${result.links.length} links on ${startUrl}`);
+
+    let { bodyContent } = result;
+    // Remove excessive whitespace and newlines (collapse multiple spaces to single space)
+    bodyContent = bodyContent.replace(/\s+/g, ' ');
     
     
     // Extract product price using OpenAI
     console.log('Extracting price data...');
     const priceData = await measureTime(
-      async () => extractProductPrice(result.bodyContent),
+      async () => extractProductPrice(bodyContent),
       'Price extraction'
     );
     console.log('Extracted price data:');
@@ -63,14 +67,14 @@ async function main() {
     // Extract product images using OpenAI
     console.log('Extracting image data...');
     const imageData = await measureTime(
-      async () => extractProductImages(result.bodyContent),
+      async () => extractProductImages(bodyContent),
       'Image extraction'
     );
     console.log('Extracted image data:');
     console.log(JSON.stringify(imageData, null, 2));
     
     // Save the body content to a file
-    const savedFilePath = await saveHtmlContent(startUrl, result.bodyContent);
+    const savedFilePath = await saveHtmlContent(startUrl, bodyContent);
     console.log(`Body content saved to ${savedFilePath}`);
     
     // Save the extracted price data to a JSON file
@@ -85,6 +89,7 @@ async function main() {
       url: startUrl,
       title: result.title,
       description: result.description,
+      timestamp: new Date().toISOString(),
       priceData,
       imageData,
       links: result.links
